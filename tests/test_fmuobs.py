@@ -33,6 +33,7 @@ def fixture_readonly_testdata_dir(monkeypatch):
         ("ert-doc.csv", "csv"),
         ("fmu-ensemble-obs.yml", "yaml"),
         ("drogon_wbhp_rft_wct_gor_tracer_4d.obs", "ert"),
+        ("drogon_wbhp_rft_wct_gor_tracer_plt_local.obs", "ert"),
     ],
 )
 def test_autoparse_file(filename, expected_format, readonly_testdata_dir):
@@ -161,6 +162,7 @@ def test_roundtrip_ertobs(filename, readonly_testdata_dir):
         ("ert-doc.csv"),
         ("fmu-ensemble-obs.yml"),
         ("drogon_wbhp_rft_wct_gor_tracer_4d.obs"),
+        ("drogon_wbhp_rft_wct_gor_tracer_plt_local.obs"),
     ],
 )
 def test_roundtrip_yaml(filename, readonly_testdata_dir):
@@ -206,6 +208,7 @@ def test_roundtrip_yaml(filename, readonly_testdata_dir):
         ("ert-doc.csv"),
         ("fmu-ensemble-obs.yml"),
         ("drogon_wbhp_rft_wct_gor_tracer_4d.obs"),
+        ("drogon_wbhp_rft_wct_gor_tracer_plt_local.obs"),
     ],
 )
 def test_roundtrip_resinsight(filename, readonly_testdata_dir):
@@ -228,17 +231,85 @@ def test_roundtrip_resinsight(filename, readonly_testdata_dir):
 
     # LABEL is not part of the ResInsight format, and a made-up label
     # is obtained through the roundtrip (when importing back). Skip it
-    # when comparing.
+    # when comparing. ERROR_MODE is also not preserved in ResInsight format.
 
     pd.testing.assert_frame_equal(
         ri_roundtrip_dframe.sort_index(axis="columns").drop(
-            ["LABEL", "COMMENT", "SUBCOMMENT"], axis="columns", errors="ignore"
+            ["LABEL", "COMMENT", "SUBCOMMENT", "ERROR_MODE"], axis="columns", errors="ignore"
         ),
         dframe.sort_index(axis="columns").drop(
-            ["LABEL", "COMMENT", "SUBCOMMENT"], axis="columns", errors="ignore"
+            ["LABEL", "COMMENT", "SUBCOMMENT", "ERROR_MODE"], axis="columns", errors="ignore"
         ),
         check_like=True,
     )
+
+
+
+def test_drogon_plt_local_localization_ignored(readonly_testdata_dir):
+    """Test that LOCALIZATION sub-blocks inside SUMMARY_OBSERVATION are silently
+    ignored, and that the rest of the observation file is parsed correctly.
+
+    The file contains PLT, RFT, WBHP, WWCT, WGOR, and tracer observations,
+    with LOCALIZATION {EAST=...; NORTH=...; RADIUS=...;} blocks that are not
+    representable in the internal dataframe format."""
+    filename = "drogon_wbhp_rft_wct_gor_tracer_plt_local.obs"
+    dframe = autoparse_file(filename)[1]
+
+    assert not dframe.empty
+    assert "LOCALIZATION" not in dframe.columns
+    assert set(dframe["CLASS"].unique()) == {
+        "SUMMARY_OBSERVATION",
+        "GENERAL_OBSERVATION",
+        "RFT_OBSERVATION",
+    }
+
+    # SUMMARY_OBSERVATION rows should have the expected key columns
+    smry_df = dframe[dframe["CLASS"] == "SUMMARY_OBSERVATION"]
+    assert not smry_df.empty
+    for col in ["KEY", "VALUE", "ERROR", "DATE"]:
+        assert col in smry_df.columns
+        assert smry_df[col].notna().all()
+
+    # Roundtrip through ERT obs format for the classes df2ertobs supports
+    supported_classes = {"SUMMARY_OBSERVATION", "GENERAL_OBSERVATION"}
+    dframe_supported = dframe[dframe["CLASS"].isin(supported_classes)]
+    ertobs_str = df2ertobs(dframe_supported)
+    roundtrip_dframe = ertobs2df(ertobs_str).set_index("CLASS")
+    dframe_supported = dframe_supported.set_index("CLASS")
+
+    for class_ in dframe_supported.index.unique():
+        roundtrip_subframe = (
+            roundtrip_dframe.loc[[class_]].dropna(axis=1, how="all").sort_index(axis=1)
+        )
+        subframe = (
+            dframe_supported.loc[[class_]]
+            .dropna(axis=1, how="all")
+            .sort_index(axis=1)
+            .set_index(
+                list(
+                    {"LABEL", "OBS", "SEGMENT"}.intersection(
+                        set(dframe_supported.columns)
+                    )
+                )
+            )
+            .sort_index()
+            # ERROR_MODE and comments are not preserved through the ertobs roundtrip
+            .drop(
+                ["COMMENT", "SUBCOMMENT", "ERROR_MODE"], axis="columns", errors="ignore"
+            )
+        )
+        roundtrip_subframe = roundtrip_subframe.set_index(
+            list(
+                {"LABEL", "OBS", "SEGMENT"}.intersection(
+                    set(roundtrip_subframe.columns)
+                )
+            )
+        ).sort_index()
+        pd.testing.assert_frame_equal(
+            roundtrip_subframe,
+            subframe,
+            check_dtype=False,
+        )
 
 
 @pytest.mark.integration

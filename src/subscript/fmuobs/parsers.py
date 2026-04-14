@@ -358,8 +358,10 @@ def flatten_observation_unit(
 
     for subunit in subunit_keys:
         if len(subunit.split()) < 2:
-            # It must be two strings, like "OBS P1", or "SEGMENT FIRST_YEAR".
-            raise ValueError("Wrong observation subunit syntax: " + str(subunit))
+            # Single-word subunit keys (e.g. LOCALIZATION) have no label and
+            # are not representable in the internal dataframe format; skip them.
+            logger.debug("Ignoring unlabeled subunit block: %s", subunit)
+            continue
         obs_subunits.append(
             {
                 subunit.split()[0]: subunit.split()[1],
@@ -367,6 +369,9 @@ def flatten_observation_unit(
                 **obsunit[subunit],
             }
         )
+    if not obs_subunits:
+        # All subunits were single-word (unlabeled); treat as a plain observation.
+        return [keyvalues]
     return obs_subunits
 
 
